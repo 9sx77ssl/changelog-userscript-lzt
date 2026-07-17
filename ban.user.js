@@ -3,8 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @version      9.0
 // @description  Адекватные ban логи на форуме, !!нахуй ксенфоро!!
-// @author       lolz.live/gay1234
-// @match        https://lolz.live/*
+// @author       lolz.team/gay1234
+// @match        https://lolz.team/*
 // @match        https://zelenka.guru/*
 // @run-at       document-start
 // @grant        none
