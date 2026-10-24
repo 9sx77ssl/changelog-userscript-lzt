@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Lolzteam CleanBANLOGS
 // @namespace    http://tampermonkey.net/
-// @version      9.0
+// @version      9.1
 // @description  Адекватные ban логи на форуме, !!нахуй ксенфоро!!
 // @author       lolz.team/gay1234
 // @match        https://lolz.team/*
+// @match        https://lolz.live/*
+// @match        https://lolz.guru/*
 // @match        https://zelenka.guru/*
 // @run-at       document-start
 // @grant        none
@@ -13,8 +15,9 @@
 (function() {
     'use strict';
 
-    const style = document.createElement('style');
-    style.textContent = `
+    const STYLE_ID = 'clean-ban-logs-style';
+
+    const styleText = `
         #clean-ban-logs-table .ban-block-group .ban-cell {
             padding: 12px 20px !important;
         }
@@ -37,14 +40,44 @@
         }
     `;
 
-    (document.head || document.documentElement).appendChild(style);
+    function injectStyle() {
+        if (document.getElementById(STYLE_ID)) return;
+        const host = document.head || document.documentElement;
+        if (!host) return;
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = styleText;
+        host.appendChild(style);
+    }
+
+    function getText(html) {
+        const temp = document.createElement('div');
+        temp.innerHTML = html;
+        return temp.textContent.trim();
+    }
+
+    function cleanReasonHtml(html) {
+        const temp = document.createElement('template');
+        temp.innerHTML = html;
+
+        const walker = document.createTreeWalker(temp.content, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node && !node.nodeValue.trim()) node = walker.nextNode();
+        if (node) node.nodeValue = node.nodeValue.replace(/^\s*\.\s*/, '');
+
+        return temp.innerHTML;
+    }
 
     function processLogs() {
-        const logTable = document.querySelector('table.userChangeLogs');
-        if (!logTable || document.getElementById('clean-ban-logs-table')) return;
+        const logTable = Array.from(document.querySelectorAll('table.userChangeLogs'))
+            .find(table => table.id !== 'clean-ban-logs-table');
+        if (!logTable) return;
+
+        const wrapper = logTable.parentNode;
+        if (!wrapper || wrapper.querySelector('#clean-ban-logs-table')) return;
 
         const rows = logTable.querySelectorAll('tbody > tr');
-        if (rows.length === 0) return;
+        if (rows.length === 0 || !logTable.querySelector('.logHeader')) return;
 
         let events = [];
         let currentEvent = null;
@@ -58,35 +91,32 @@
 
                 const timeEl = header.querySelector('time.u-dt');
                 const timeClone = timeEl ? timeEl.cloneNode(true) : document.createTextNode('Дата неизвестна');
-                const timestamp = timeEl ? parseInt(timeEl.getAttribute('data-timestamp')) : 0;
+                const timestamp = timeEl ? parseInt(timeEl.getAttribute('data-timestamp'), 10) || 0 : 0;
 
                 const links = header.querySelectorAll('a.username');
-                let modHtml = '<span style="color: #f13838; font-weight: 600;">root</span> отредактировал(а)';
-                if (links.length >= 2) {
-                    modHtml = links[links.length - 1].outerHTML + ' отредактировал(а)';
+                let moderatorHtml = '<span class="muted">Неизвестно</span>';
+                if (links.length) {
+                    moderatorHtml = links[links.length - 1].outerHTML;
+                    if (/отредактировал|edited/i.test(header.textContent)) {
+                        moderatorHtml += ' отредактировал(а)';
+                    }
                 }
 
                 currentEvent = {
                     timestamp: timestamp,
                     timeEl: timeClone,
-                    moderatorHtml: modHtml,
+                    moderatorHtml: moderatorHtml,
                     status: 'Изменение статуса',
                     statusColor: '#aaa',
                     reasonHtml: 'Не указана'
                 };
             } else if (field && currentEvent) {
                 const fieldName = field.textContent.trim();
-                const cells = row.querySelectorAll('td');
+                const cells = row.cells;
                 const oldValTd = cells[1] ? cells[1].innerHTML : '';
                 const newValTd = cells[2] ? cells[2].innerHTML : '';
 
-                const getText = (html) => {
-                    const temp = document.createElement('div');
-                    temp.innerHTML = html;
-                    return temp.textContent.trim();
-                };
-
-                if (fieldName === 'Заблокирован(а)') {
+                if (fieldName === 'Заблокирован' || fieldName === 'Заблокирован(а)' || fieldName === 'Banned') {
                     const oldText = getText(oldValTd);
                     const newText = getText(newValTd);
                     if (newText === 'Да' && oldText === 'Нет') {
@@ -98,19 +128,19 @@
                     }
                 }
 
-                if (fieldName === 'Причина блокировки') {
+                if (fieldName === 'Причина блокировки' || fieldName === 'Ban reason') {
                     let reasonText = getText(newValTd);
                     let reasonHtml = newValTd;
 
                     if (!reasonText || reasonText === '.' || reasonText === '. Пожизненная блокировка.') {
-                        reasonText = getText(oldValTd);
-                        reasonHtml = oldValTd;
-                    }
-                    if (reasonHtml.startsWith('.')) {
-                        reasonHtml = reasonHtml.replace(/^\.\s*/, '');
+                        const oldText = getText(oldValTd);
+                        if (oldText && oldText !== '.') {
+                            reasonText = oldText;
+                            reasonHtml = oldValTd;
+                        }
                     }
                     if (reasonText && reasonText !== '.') {
-                        currentEvent.reasonHtml = reasonHtml;
+                        currentEvent.reasonHtml = cleanReasonHtml(reasonHtml);
                     }
                 }
             }
@@ -122,11 +152,11 @@
 
         const banCount = events.filter(e => e.status === 'Заблокирован').length;
 
-        let buttonsDiv = logTable.parentNode.querySelector('#logs-buttons-f');
+        let buttonsDiv = wrapper.querySelector('#logs-buttons-f');
         if (!buttonsDiv) {
             buttonsDiv = document.createElement('div');
             buttonsDiv.id = 'logs-buttons-f';
-            logTable.parentNode.insertBefore(buttonsDiv, logTable);
+            wrapper.insertBefore(buttonsDiv, logTable);
         }
         buttonsDiv.innerHTML = `<span>Всего банов: ${banCount} <img src="https://nztcdn.com/files/f6261e1b-8534-4a4d-97d1-2cc0ea5d402a.webp" alt="rooster" style="width:25px; height:16px; vertical-align: middle;"></span>`;
 
@@ -182,13 +212,36 @@
             }
         });
 
-        logTable.parentNode.replaceChild(newTable, logTable);
+        wrapper.replaceChild(newTable, logTable);
     }
-    const observer = new MutationObserver(() => {
-        if (document.querySelector('table.userChangeLogs') && !document.getElementById('clean-ban-logs-table')) {
-            processLogs();
-        }
-    });
 
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    let scheduled = false;
+    function schedule() {
+        if (scheduled) return;
+        scheduled = true;
+        window.setTimeout(() => {
+            scheduled = false;
+            processLogs();
+        }, 50);
+    }
+
+    let started = false;
+    function start() {
+        if (started) return;
+        if (!document.documentElement || !document.head) {
+            window.setTimeout(start, 16);
+            return;
+        }
+
+        started = true;
+        injectStyle();
+        processLogs();
+
+        const observer = new MutationObserver(schedule);
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        window.addEventListener('hashchange', schedule, true);
+        window.addEventListener('popstate', schedule, true);
+    }
+
+    start();
 })();
